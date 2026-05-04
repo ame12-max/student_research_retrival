@@ -1,9 +1,10 @@
+// frontend/src/services/api.js
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+// Use relative path for API (Vercel will proxy to Render)
+const API_BASE_URL = '/api/v1';
 
 const api = axios.create({
-
   baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' }
 });
@@ -41,7 +42,7 @@ export const booleanSearch = (query, page = 1, limit = 10) =>
   api.post('/search/boolean', { query, page, limit });
 export const relevanceFeedback = (originalQuery, relevantDocIds, alpha = 1.0, beta = 0.5) => 
   api.post('/search/feedback', { 
-    originalQuery: originalQuery,  // Send as originalQuery
+    originalQuery: originalQuery,
     relevantDocIds, 
     alpha, 
     beta 
