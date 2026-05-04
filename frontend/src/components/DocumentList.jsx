@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { getDocuments, deleteDocument } from '../services/api';
 import { Link } from 'react-router-dom';
 import { PencilIcon, TrashIcon, MagnifyingGlassIcon, ArrowUpIcon, ArrowDownIcon } from '@heroicons/react/24/outline';
+import toast from 'react-hot-toast';
+
 
 export default function DocumentList() {
   const [docs, setDocs] = useState([]);
@@ -54,9 +56,10 @@ export default function DocumentList() {
     if (window.confirm(`Delete "${title}"? This action cannot be undone.`)) {
       try {
         await deleteDocument(id);
+        toast.success('Document deleted');
         fetchDocs();
       } catch (err) {
-        alert('Delete failed');
+        toast.error('Delete failed');
       }
     }
   };

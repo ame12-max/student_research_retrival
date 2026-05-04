@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { uploadDocument } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { CloudArrowUpIcon, DocumentIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import toast from 'react-hot-toast';
 
 export default function UploadDocument() {
   const [title, setTitle] = useState('');
@@ -29,7 +30,7 @@ export default function UploadDocument() {
     if (droppedFile && (droppedFile.type === 'text/plain' || droppedFile.name.endsWith('.pdf'))) {
       setFile(droppedFile);
     } else {
-      alert('Only .txt or .pdf files are allowed');
+      toast.error('Only .txt or .pdf files are allowed');
     }
   }, []);
 
@@ -38,14 +39,14 @@ export default function UploadDocument() {
     if (selected && (selected.type === 'text/plain' || selected.name.endsWith('.pdf'))) {
       setFile(selected);
     } else {
-      alert('Only .txt or .pdf files are allowed');
+      toast.error('Only .txt or .pdf files are allowed');
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!title || !file) {
-      alert('Please provide a title and select a file');
+      toast.error('Please provide a title and select a file');
       return;
     }
     const formData = new FormData();
@@ -55,9 +56,10 @@ export default function UploadDocument() {
     setLoading(true);
     try {
       await uploadDocument(formData);
+      toast.success('Document uploaded successfully');
       navigate('/admin');
     } catch (err) {
-      alert('Upload failed: ' + err.message);
+      toast.error('Upload failed: ' + err.message);
     } finally {
       setLoading(false);
     }

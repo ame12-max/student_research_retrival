@@ -4,6 +4,7 @@ import SearchBar from '../components/SearchBar';
 import SearchResults from '../components/SearchResults';
 import HeroCarousel from '../components/HeroCarousel';
 import RelevanceFeedback from '../components/RelevanceFeedback';
+import toast from 'react-hot-toast';
 
 export default function SearchPage() {
   const [results, setResults] = useState([]);
@@ -16,43 +17,67 @@ export default function SearchPage() {
   const [lastQuery, setLastQuery] = useState('');
   const [lastResults, setLastResults] = useState([]);
 
-  const handleSearch = async (query, page = 1) => {
-    if (!query.trim()) return;
-    setLoading(true);
-    setCurrentQuery(query);
-    setCurrentPage(page);
-    setLastQuery(query);
-    try {
-      let res;
-      if (mode === 'standard') {
-        res = await search(query, page, 10);
-      } else {
-        res = await booleanSearch(query, page, 10);
-      }
+const handleSearch = async (query, page = 1) => {
+  if (!query || query.trim() === '') {
+    console.log('Empty query, skipping search');
+    return;
+  }
+  
+  setLoading(true);
+  setCurrentQuery(query);
+  setCurrentPage(page);
+  setLastQuery(query);
+  try {
+    let res;
+    if (mode === 'standard') {
+      res = await search(query, page, 10);
+    } else {
+      res = await booleanSearch(query, page, 10);
+    }
+    
+    if (res.data && res.data.results) {
       setResults(res.data.results);
-      setTotalResults(res.data.totalResults);
+      setTotalResults(res.data.totalResults || 0);
       setLastResults(res.data.results);
-    } catch (err) {
-      console.error(err);
+    } else {
       setResults([]);
       setTotalResults(0);
-    } finally {
-      setLoading(false);
     }
-  };
+  } catch (err) {
+    console.error('Search error:', err);
+    if (err.response?.status === 400) {
+      console.log('Invalid search query:', err.response?.data?.message);
+    }
+    setResults([]);
+    setTotalResults(0);
+  } finally {
+    setLoading(false);
+  }
+};
 
-  const handleFeedback = async (relevantIds) => {
-    try {
-      const res = await relevanceFeedback(lastQuery, relevantIds);
+const handleFeedback = async (relevantIds) => {
+  console.log('Feedback submitted with IDs:', relevantIds);
+  console.log('Last query:', lastQuery);
+  
+  try {
+    const res = await relevanceFeedback(lastQuery, relevantIds);
+    console.log('Feedback response:', res.data);
+    
+    if (res.data.results && res.data.results.length > 0) {
       setResults(res.data.results);
       setTotalResults(res.data.results.length);
       setCurrentQuery(res.data.expandedQuery);
-      setShowFeedback(false);
-    } catch (err) {
-      console.error(err);
-      alert('Failed to refine search');
+      toast.success(`Search refined! Found ${res.data.results.length} results.`);
+    } else {
+      toast.info('No improved results found. Try selecting different documents.');
     }
-  };
+    setShowFeedback(false);
+  } catch (err) {
+    console.error('Relevance feedback error:', err);
+    const errorMsg = err.response?.data?.message || err.message || 'Failed to refine search';
+    toast.error(errorMsg);
+  }
+};
 
   const hasSearched = currentQuery !== '';
 

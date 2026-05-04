@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import toast from 'react-hot-toast';
 
 export default function RelevanceFeedback({ results, onSubmit, onCancel }) {
   const [selectedIds, setSelectedIds] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const toggleSelect = (id) => {
     setSelectedIds(prev =>
@@ -9,17 +11,45 @@ export default function RelevanceFeedback({ results, onSubmit, onCancel }) {
     );
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (selectedIds.length === 0) {
-      alert('Please select at least one relevant document');
+      toast.error('Please select at least one relevant document');
       return;
     }
-    onSubmit(selectedIds);
+    
+    setIsSubmitting(true);
+    console.log('Submitting relevant IDs:', selectedIds);
+    
+    try {
+      await onSubmit(selectedIds);
+      toast.success('Search refined successfully!');
+    } catch (error) {
+      console.error('Submit error:', error);
+      toast.error('Failed to refine search');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSelectAll = () => {
+    if (selectedIds.length === results.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(results.map(r => r.documentId));
+    }
   };
 
   return (
     <div className="mt-6 p-4 bg-orange-50 border border-orange-200 rounded-lg">
-      <h3 className="font-semibold text-lg text-orange-800">Improve Search Results</h3>
+      <div className="flex justify-between items-center mb-3">
+        <h3 className="font-semibold text-lg text-orange-800">Improve Search Results</h3>
+        <button
+          onClick={handleSelectAll}
+          className="text-sm text-orange-600 hover:text-orange-800"
+        >
+          {selectedIds.length === results.length ? 'Deselect All' : 'Select All'}
+        </button>
+      </div>
       <p className="text-sm text-gray-600 mb-3">
         Select the documents that are most relevant to your search. The system will expand your query to find better results.
       </p>
@@ -44,12 +74,14 @@ export default function RelevanceFeedback({ results, onSubmit, onCancel }) {
       <div className="flex gap-2 mt-4">
         <button
           onClick={handleSubmit}
-          className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition"
+          disabled={isSubmitting || selectedIds.length === 0}
+          className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 transition"
         >
-          Refine Search
+          {isSubmitting ? 'Refining...' : `Refine Search (${selectedIds.length} selected)`}
         </button>
         <button
           onClick={onCancel}
+          disabled={isSubmitting}
           className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition"
         >
           Cancel

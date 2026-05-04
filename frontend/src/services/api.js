@@ -1,7 +1,10 @@
 import axios from 'axios';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+
 const api = axios.create({
-  baseURL: '/api/v1',
+
+  baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' }
 });
 
@@ -37,7 +40,12 @@ export const getSuggestions = (prefix) => api.get(`/search/suggest?prefix=${pref
 export const booleanSearch = (query, page = 1, limit = 10) => 
   api.post('/search/boolean', { query, page, limit });
 export const relevanceFeedback = (originalQuery, relevantDocIds, alpha = 1.0, beta = 0.5) => 
-  api.post('/search/feedback', { originalQuery, relevantDocIds, alpha, beta });
+  api.post('/search/feedback', { 
+    originalQuery: originalQuery,  // Send as originalQuery
+    relevantDocIds, 
+    alpha, 
+    beta 
+  });
 
 // Index (admin)
 export const getIndexStats = () => api.get('/index/stats');

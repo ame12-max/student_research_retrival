@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getDocument, updateDocument } from '../services/api';
 import { DocumentIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import toast from 'react-hot-toast';
 
 export default function EditDocument() {
   const { id } = useParams();
@@ -19,7 +20,7 @@ export default function EditDocument() {
         setTitle(res.data.document.title);
         setAuthor(res.data.document.author || '');
       } catch (err) {
-        alert('Failed to load document');
+        toast.error('Failed to load document');
         navigate('/admin');
       } finally {
         setFetching(false);
@@ -37,10 +38,10 @@ export default function EditDocument() {
     if (file) formData.append('file', file);
     try {
       await updateDocument(id, formData);
-      alert('Document updated successfully');
+      toast.success('Document updated successfully');
       navigate('/admin');
     } catch (err) {
-      alert('Update failed: ' + err.message);
+      toast.error('Update failed: ' + err.message);
     } finally {
       setLoading(false);
     }
