@@ -32,10 +32,17 @@ if (dbHost && dbUser && dbPassword && dbName) {
     pool = null;
   }
 } else if (process.env.DATABASE_URL) {
-  // Fallback to DATABASE_URL if provided
+  // Fallback to DATABASE_URL if provided (Render uses this)
   try {
+    let connectionString = process.env.DATABASE_URL;
+    
+    // Add sslmode=require for Render PostgreSQL if not present
+    if (!connectionString.includes('sslmode') && process.env.NODE_ENV === 'production') {
+      connectionString += connectionString.includes('?') ? '&sslmode=require' : '?sslmode=require';
+    }
+    
     pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: connectionString,
       ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
     });
     useDatabase = true;
