@@ -3,3 +3,5 @@ node_modules
 dist
 dist-ssr
 uploads/documents
+npm-cache
+yarn-cache

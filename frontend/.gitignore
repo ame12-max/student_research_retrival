@@ -26,3 +26,5 @@ dist-ssr
 node_modules
 .env
 uploads/documents
+npm-cache
+yarn-cache
