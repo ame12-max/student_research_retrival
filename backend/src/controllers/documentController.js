@@ -1,17 +1,11 @@
+// backend/src/controllers/documentController.js
 const fs = require('fs');
-const path = require('path');
 const { createDocument, getDocumentById, getAllDocuments, updateDocument, deleteDocument } = require('../models/documentModel');
 const { addDocumentToIndex, removeDocumentFromIndex, updateDocumentInIndex } = require('../services/indexingService');
 const { extractTextFromPDF } = require('../services/pdfService');
-const { promisify } = require('util');
-const rename = promisify(fs.rename);
-// Ensure permanent upload directory exists
 
-const PERMANENT_UPLOAD_DIR = path.join(__dirname, '../../uploads/documents');
-if (!fs.existsSync(PERMANENT_UPLOAD_DIR)) {
-  fs.mkdirSync(PERMANENT_UPLOAD_DIR, { recursive: true });
-}
-
+// Upload a new document (supports .txt and .pdf)
+// Upload a new document (supports .txt and .pdf)
 const uploadDocument = async (req, res) => {
   try {
     if (!req.file) {
@@ -25,11 +19,26 @@ const uploadDocument = async (req, res) => {
     let content;
     const fileExt = req.file.originalname.split('.').pop().toLowerCase();
     
+    // Create permanent storage directory if it doesn't exist
+    const path = require('path');
+    const PERMANENT_UPLOAD_DIR = path.join(__dirname, '../../uploads/documents');
+    if (!fs.existsSync(PERMANENT_UPLOAD_DIR)) {
+      fs.mkdirSync(PERMANENT_UPLOAD_DIR, { recursive: true });
+    }
+    
+    // Generate unique filename for permanent storage
+    const uniqueFilename = `${Date.now()}_${req.file.originalname}`;
+    const permanentFilePath = path.join(PERMANENT_UPLOAD_DIR, uniqueFilename);
+    
     if (fileExt === 'txt') {
       content = fs.readFileSync(req.file.path, 'utf8');
+      // Copy file to permanent location
+      fs.copyFileSync(req.file.path, permanentFilePath);
     } else if (fileExt === 'pdf') {
       try {
         content = await extractTextFromPDF(req.file.path);
+        // Copy file to permanent location
+        fs.copyFileSync(req.file.path, permanentFilePath);
       } catch (pdfErr) {
         fs.unlinkSync(req.file.path);
         return res.status(500).json({ 
@@ -41,71 +50,72 @@ const uploadDocument = async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Only .txt or .pdf files allowed' });
     }
     
-    // Create document in database (without filePath first)
-    const doc = await createDocument(title, author, req.file.originalname, content, '');
-    
-    // Permanent file name and path
-    const permanentFileName = `${doc.id}_${req.file.originalname}`;
-    const permanentFilePath = path.join(PERMANENT_UPLOAD_DIR, permanentFileName);
-    
-    // Move uploaded file to permanent location
-    await rename(req.file.path, permanentFilePath);
-    
-    // Update document with the permanent file path
-    const updatedDoc = await updateDocument(doc.id, { filePath: permanentFilePath });
+    // Create document in storage with file path
+    const doc = await createDocument(title, author, req.file.originalname, content, permanentFilePath);
     
     // Add to index
     await addDocumentToIndex(doc.id, content);
+    
+    // Clean up temporary uploaded file
+    fs.unlinkSync(req.file.path);
     
     res.status(201).json({
       status: 'success',
       message: 'Document uploaded and indexed',
       document: {
-        id: updatedDoc.id,
-        title: updatedDoc.title,
-        author: updatedDoc.author,
-        filename: updatedDoc.filename,
-        uploadDate: updatedDoc.uploadDate,
-        wordCount: updatedDoc.wordCount
+        id: doc.id,
+        title: doc.title,
+        author: doc.author,
+        filename: doc.filename,
+        filePath: doc.filePath,
+        uploadDate: doc.uploadDate,
+        wordCount: doc.wordCount
       }
     });
   } catch (err) {
-    console.error('Upload error:', err);
-    // Clean up temporary file if still exists
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
+    console.error(err);
     res.status(500).json({ status: 'error', message: 'Internal server error' });
   }
 };
 
-
-
+// List all documents - FIXED: await the async function
 const listDocuments = async (req, res) => {
-  const docs = getAllDocuments();
-  const simplified = docs.map(doc => ({
-    id: doc.id,
-    title: doc.title,
-    author: doc.author,
-    uploadDate: doc.uploadDate,
-    wordCount: doc.wordCount
-  }));
-  res.json({ status: 'success', count: simplified.length, documents: simplified });
-};
-
-const getDocument = async (req, res) => {
-  const { id } = req.params;
-  const doc = getDocumentById(id);
-  if (!doc) {
-    return res.status(404).json({ status: 'error', message: 'Document not found' });
+  try {
+    const docs = await getAllDocuments(); // Added await
+    const simplified = docs.map(doc => ({
+      id: doc.id,
+      title: doc.title,
+      author: doc.author,
+      uploadDate: doc.uploadDate,
+      wordCount: doc.wordCount
+    }));
+    res.json({ status: 'success', count: simplified.length, documents: simplified });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: 'error', message: 'Failed to fetch documents' });
   }
-  res.json({ status: 'success', document: doc });
 };
 
+// Get single document - FIXED: await the async function
+const getDocument = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const doc = await getDocumentById(id); // Added await
+    if (!doc) {
+      return res.status(404).json({ status: 'error', message: 'Document not found' });
+    }
+    res.json({ status: 'success', document: doc });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: 'error', message: 'Failed to fetch document' });
+  }
+};
+
+// Update document - FIXED: await the async functions
 const updateDocumentById = async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = getDocumentById(id);
+    const existing = await getDocumentById(id); // Added await
     if (!existing) {
       return res.status(404).json({ status: 'error', message: 'Document not found' });
     }
@@ -147,10 +157,11 @@ const updateDocumentById = async (req, res) => {
   }
 };
 
+// Delete document - FIXED: await the async functions
 const deleteDocumentById = async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = getDocumentById(id);
+    const existing = await getDocumentById(id); // Added await
     if (!existing) {
       return res.status(404).json({ status: 'error', message: 'Document not found' });
     }
@@ -167,8 +178,6 @@ const deleteDocumentById = async (req, res) => {
     res.status(500).json({ status: 'error', message: 'Internal server error' });
   }
 };
-
-
 
 module.exports = {
   uploadDocument,

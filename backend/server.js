@@ -1,31 +1,47 @@
-// server.js
-require('dotenv').config();
-const fs = require('fs');
-const app = require('./src/app');
+const { config } =  require('./src/config/index.js');
+const { pool, useDatabase } = require('./src/config/db.js');
+const { redisClient, useRedis } = require('./src/config/redis.js');
+const app = require('./src/app.js');
 
-const PORT = process.env.PORT || 5000;
-
-// Ensure uploads directory exists
-if (!fs.existsSync('./uploads')) {
-  fs.mkdirSync('./uploads');
+// Validate required config
+if (!config.jwtSecret) {
+  console.error('FATAL: JWT_SECRET not set');
+  process.exit(1);
 }
 
-// Start server first, then rebuild index in background
-const server = app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+const PORT = config.PORT || 5000;
+// Initialize index
+async function initializeIndex() {
+  const { loadIndexFromRedis, rebuildIndex } = require('./src/services/indexingService');
+  
+  if (useRedis) {
+    console.log('Attempting to load index from Redis...');
+    const loaded = await loadIndexFromRedis();
+    if (!loaded) {
+      console.log('No Redis cache found, building index from documents...');
+      await rebuildIndex();
+    }
+  } else {
+    await rebuildIndex();
+  }
+}
 
-// Rebuild index after server starts (non-blocking)
-const { rebuildIndex } = require('./src/services/indexingService');
-rebuildIndex().then(() => {
-  console.log('Initial index rebuild completed');
-}).catch(err => {
-  console.error('Initial index rebuild failed:', err);
-});
+// Graceful shutdown
+async function shutdown() {
+  console.log('Shutting down gracefully...');
+  if (useDatabase && pool) await pool.end();
+  if (useRedis && redisClient) await redisClient.quit();
+  process.exit(0);
+}
 
-// Graceful shutdown (optional)
-process.on('SIGTERM', () => {
-  server.close(() => {
-    console.log('Process terminated');
-  });
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+// Start server
+const server = app.listen(PORT, '0.0.0.0',  async () => {
+  console.log(`Server running on http://localhost:${config.port}`);
+  console.log(`Mode: ${config.env}`);
+  console.log(`Database: ${useDatabase ? 'PostgreSQL' : 'JSON'}`);
+  console.log(`Redis: ${useRedis ? 'enabled' : 'disabled'}`);
+  await initializeIndex();
 });

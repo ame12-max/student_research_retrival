@@ -1,6 +1,7 @@
 // src/services/indexingService.js
 const { preprocess, getTermFreqMap } = require('./preprocessingService');
 const { getAllDocuments, getDocumentById } = require('../models/documentModel');
+const { useRedis, redisClient } = require('../config/redis');
 
 // In-memory data structures
 let invertedIndex = new Map();
@@ -23,17 +24,101 @@ function getDocSetForTerm(term) {
 }
 // ----------------------------------------------------------------------------------
 
+// Persist index to Redis
+async function persistIndexToRedis() {
+  if (!useRedis || !redisClient) return;
+  
+  try {
+    const pipeline = redisClient.pipeline();
+    
+    // Store metadata
+    pipeline.set('index:totalDocs', totalDocs);
+    pipeline.set('index:lastRebuild', new Date().toISOString());
+    
+    // Store each term's postings
+    for (const [term, data] of invertedIndex.entries()) {
+      const postingsObj = {};
+      for (const [docId, weight] of data.postings.entries()) {
+        postingsObj[docId] = weight;
+      }
+      pipeline.hset(`term:${term}`, 'df', data.df);
+      pipeline.hset(`term:${term}`, 'postings', JSON.stringify(postingsObj));
+    }
+    
+    // Save document norms
+    const normsObj = {};
+    for (const [docId, norm] of docNorms.entries()) {
+      normsObj[docId] = norm;
+    }
+    pipeline.set('index:docNorms', JSON.stringify(normsObj));
+    
+    await pipeline.exec();
+    console.log('✅ Index persisted to Redis');
+  } catch (err) {
+    console.error('Failed to persist index to Redis:', err.message);
+  }
+}
+
+// Load index from Redis on startup
+async function loadIndexFromRedis() {
+  if (!useRedis || !redisClient) return false;
+  
+  try {
+    const totalDocsRedis = await redisClient.get('index:totalDocs');
+    if (!totalDocsRedis) return false;
+    
+    totalDocs = parseInt(totalDocsRedis);
+    const normsStr = await redisClient.get('index:docNorms');
+    if (normsStr) {
+      const normsObj = JSON.parse(normsStr);
+      for (const [docId, norm] of Object.entries(normsObj)) {
+        docNorms.set(docId, norm);
+      }
+    }
+    
+    // Load terms
+    const keys = await redisClient.keys('term:*');
+    for (const key of keys) {
+      const term = key.replace('term:', '');
+      const df = parseInt(await redisClient.hget(key, 'df'));
+      const postingsStr = await redisClient.hget(key, 'postings');
+      const postingsObj = JSON.parse(postingsStr);
+      const postings = new Map();
+      for (const [docId, weight] of Object.entries(postingsObj)) {
+        postings.set(docId, weight);
+      }
+      invertedIndex.set(term, { df, postings });
+    }
+    
+    console.log(`✅ Index loaded from Redis. Docs: ${totalDocs}, Terms: ${invertedIndex.size}`);
+    return true;
+  } catch (err) {
+    console.error('Failed to load index from Redis:', err.message);
+    return false;
+  }
+}
+
 // Rebuild entire index from all documents
 async function rebuildIndex() {
   console.log('Rebuilding index...');
   invertedIndex.clear();
   docNorms.clear();
   
-  const docs = getAllDocuments();
+  const docs = await getAllDocuments();
   totalDocs = docs.length;
   
+  if (totalDocs === 0) {
+    console.log('No documents found, index is empty');
+    return;
+  }
+  
+  // First pass: collect term frequencies per document
   const docTermFreqs = new Map();
   for (const doc of docs) {
+    if (!doc.content) {
+      console.warn(`Document ${doc.id} has no content, skipping`);
+      continue;
+    }
     const tokens = preprocess(doc.content);
     const termFreqMap = getTermFreqMap(tokens);
     docTermFreqs.set(doc.id, termFreqMap);
@@ -44,6 +129,7 @@ async function rebuildIndex() {
     }
   }
   
+  // Second pass: compute document frequency (df)
   for (const [term, data] of invertedIndex.entries()) {
     let df = 0;
     for (const doc of docs) {
@@ -53,6 +139,7 @@ async function rebuildIndex() {
     data.df = df;
   }
   
+  // Third pass: compute TF-IDF for each term in each document
   for (const [docId, termFreqMap] of docTermFreqs.entries()) {
     let normSq = 0;
     for (const [term, tf] of termFreqMap.entries()) {
@@ -62,17 +149,27 @@ async function rebuildIndex() {
       data.postings.set(docId, tfidf);
       normSq += tfidf * tfidf;
     }
-    docNorms.set(docId, Math.sqrt(normSq));
+    const norm = Math.sqrt(normSq);
+    docNorms.set(docId, norm);
   }
   
-  console.log(`Index rebuilt. Total docs: ${totalDocs}, Unique terms: ${invertedIndex.size}`);
+  console.log(`✅ Index rebuilt. Total docs: ${totalDocs}, Unique terms: ${invertedIndex.size}`);
+  
+  // Persist to Redis if enabled
+  await persistIndexToRedis();
 }
 
 // Add a single document to the index
 async function addDocumentToIndex(docId, content) {
+  if (!content) {
+    console.warn(`No content provided for document ${docId}, skipping indexing`);
+    return;
+  }
+  
   const tokens = preprocess(content);
   const termFreqMap = getTermFreqMap(tokens);
-  totalDocs = getAllDocuments().length;
+  const allDocs = await getAllDocuments();
+  totalDocs = allDocs.length;
   
   for (const [term, tf] of termFreqMap.entries()) {
     if (!invertedIndex.has(term)) {
@@ -94,7 +191,30 @@ async function addDocumentToIndex(docId, content) {
   }
   docNorms.set(docId, Math.sqrt(normSq));
 
-  console.log(`Adding doc ${docId}, content preview:`, content.substring(0, 100));
+  console.log(`✅ Added document ${docId} to index, words: ${tokens.length}`);
+
+  // Update Redis if enabled
+  if (useRedis && redisClient) {
+    try {
+      for (const [term, tf] of termFreqMap.entries()) {
+        const key = `term:${term}`;
+        const data = invertedIndex.get(term);
+        await redisClient.hset(key, 'df', data.df);
+        const postingsStr = await redisClient.hget(key, 'postings');
+        const postings = postingsStr ? JSON.parse(postingsStr) : {};
+        postings[docId] = computeTfIdf(tf, data.df, totalDocs);
+        await redisClient.hset(key, 'postings', JSON.stringify(postings));
+      }
+      // Update norms
+      const normsStr = await redisClient.get('index:docNorms');
+      const norms = normsStr ? JSON.parse(normsStr) : {};
+      norms[docId] = docNorms.get(docId);
+      await redisClient.set('index:docNorms', JSON.stringify(norms));
+      await redisClient.set('index:totalDocs', totalDocs);
+    } catch (err) {
+      console.error('Failed to update Redis:', err.message);
+    }
+  }
 }
 
 // Remove a document from the index
@@ -109,7 +229,9 @@ async function removeDocumentFromIndex(docId) {
     }
   }
   docNorms.delete(docId);
-  totalDocs = getAllDocuments().length;
+  const allDocs = await getAllDocuments();
+  totalDocs = allDocs.length;
+  console.log(`✅ Removed document ${docId} from index`);
 }
 
 // Update a document: remove old, add new
@@ -129,14 +251,12 @@ async function search(query) {
   }
   
   const queryVector = new Map();
-  const useFallback = new Set();
   for (const [term, tf] of queryTermFreq.entries()) {
     const data = invertedIndex.get(term);
     if (!data) continue;
     let idf = Math.log(totalDocs / data.df);
     if (idf === 0) {
       idf = Math.log(totalDocs / (data.df + 1));
-      useFallback.add(term);
     }
     queryVector.set(term, tf * idf);
   }
@@ -163,13 +283,14 @@ async function search(query) {
     if (docNorm && docNorm > 0) {
       const similarity = dotProduct / (docNorm * queryNorm);
       if (similarity > 0) {
-        const doc = getDocumentById(docId);
-        if (doc) {
+        // IMPORTANT: await the async getDocumentById
+        const doc = await getDocumentById(docId);
+        if (doc && doc.content) {
           results.push({
             documentId: docId,
-            title: doc.title,
-            author: doc.author,
-            filename: doc.filename,   // <-- ADDED
+            title: doc.title || 'Untitled',
+            author: doc.author || '',
+            filename: doc.filename || '',
             similarity: parseFloat(similarity.toFixed(4)),
             snippet: doc.content.substring(0, 200) + (doc.content.length > 200 ? '...' : '')
           });
@@ -234,12 +355,12 @@ function infixToPostfix(tokens) {
     if (token === '(') {
       stack.push(token);
     } else if (token === ')') {
-      while (stack.length && stack[stack.length-1] !== '(') {
+      while (stack.length && stack[stack.length - 1] !== '(') {
         output.push(stack.pop());
       }
       stack.pop();
     } else if (token === 'AND' || token === 'OR' || token === 'NOT') {
-      while (stack.length && precedence[stack[stack.length-1]] >= precedence[token]) {
+      while (stack.length && precedence[stack[stack.length - 1]] >= precedence[token]) {
         output.push(stack.pop());
       }
       stack.push(token);
@@ -269,7 +390,6 @@ function evaluatePostfix(postfix, allDocsSet) {
       const complement = new Set([...allDocsSet].filter(x => !operand.has(x)));
       stack.push(complement);
     } else {
-      // token is a term
       const docSet = getDocSetForTerm(token);
       stack.push(docSet);
     }
@@ -278,7 +398,7 @@ function evaluatePostfix(postfix, allDocsSet) {
 }
 
 async function booleanSearch(queryStr) {
-  const allDocs = getAllDocuments();
+  const allDocs = await getAllDocuments();
   const allDocsSet = new Set(allDocs.map(doc => doc.id));
   const tokens = tokenizeBooleanQuery(queryStr);
   if (tokens.length === 0) return [];
@@ -291,12 +411,13 @@ async function booleanSearch(queryStr) {
   
   const results = [];
   for (const docId of docSet) {
-    const doc = getDocumentById(docId);
-    if (doc) {
+    const doc = await getDocumentById(docId);
+    if (doc && doc.content) {
       results.push({
         documentId: docId,
         title: doc.title,
         author: doc.author,
+        filename: doc.filename,
         similarity: simMap.get(docId) || 0,
         snippet: doc.content.substring(0, 200) + (doc.content.length > 200 ? '...' : '')
       });
@@ -305,6 +426,7 @@ async function booleanSearch(queryStr) {
   results.sort((a, b) => b.similarity - a.similarity);
   return results;
 }
+
 // -------------------------------------------
 
 module.exports = {
@@ -318,5 +440,7 @@ module.exports = {
   booleanSearch,
   getDocumentById,
   preprocess,
-  getTermFreqMap
+  getTermFreqMap,
+  loadIndexFromRedis,
+  persistIndexToRedis,
 };
