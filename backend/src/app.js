@@ -20,7 +20,8 @@ const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 // Middleware
 const allowedOrigins = [
   'http://localhost:3000',
-    frontendUrl
+  'https://student-research-retrival.onrender.com',
+   frontendUrl,
 ];
 
 app.use(cors({
