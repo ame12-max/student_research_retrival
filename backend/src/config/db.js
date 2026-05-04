@@ -4,69 +4,36 @@ const { Pool } = require('pg');
 let pool = null;
 let useDatabase = false;
 
-// Get connection parameters from environment
-const dbHost = process.env.DB_HOST;
-const dbPort = parseInt(process.env.DB_PORT) || 5432;
-const dbName = process.env.DB_NAME;
-const dbUser = process.env.DB_USER;
-const dbPassword = process.env.DB_PASSWORD;
-
-if (dbHost && dbUser && dbPassword && dbName) {
-  try {
-    pool = new Pool({
-      host: dbHost,
-      port: dbPort,
-      database: dbName,
-      user: dbUser,
-      password: dbPassword,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
-    });
-    useDatabase = true;
-    console.log('✅ PostgreSQL configured with individual parameters');
-  } catch (err) {
-    console.warn('⚠️ PostgreSQL configuration failed:', err.message);
-    useDatabase = false;
-    pool = null;
-  }
-} else if (process.env.DATABASE_URL) {
-  // Fallback to DATABASE_URL if provided
+if (process.env.DATABASE_URL) {
   try {
     pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      ssl: { rejectUnauthorized: false }, // This is the key fix
+      connectionTimeoutMillis: 10000,
     });
     useDatabase = true;
     console.log('✅ PostgreSQL configured via DATABASE_URL');
   } catch (err) {
-    console.warn('⚠️ PostgreSQL configuration failed:', err.message);
+    console.error('❌ PostgreSQL configuration failed:', err.message);
     useDatabase = false;
-    pool = null;
   }
 } else {
-  console.log('📁 Using JSON file storage (no PostgreSQL config)');
+  console.log('📁 DATABASE_URL not set, using JSON storage');
 }
 
-const testDbConnection = async () => {
-  if (!useDatabase || !pool) return false;
-  try {
-    const client = await pool.connect();
-    await client.query('SELECT 1');
-    client.release();
-    console.log('✅ PostgreSQL connection test successful');
-    return true;
-  } catch (err) {
-    console.error('❌ PostgreSQL connection test failed:', err.message);
-    useDatabase = false;
-    return false;
-  }
-};
-
-// Test connection if PostgreSQL is enabled
-if (useDatabase) {
-  testDbConnection().catch(console.error);
+// Test connection immediately
+if (useDatabase && pool) {
+  (async () => {
+    try {
+      const client = await pool.connect();
+      await client.query('SELECT NOW()');
+      console.log('✅ PostgreSQL connected successfully');
+      client.release();
+    } catch (err) {
+      console.error('❌ PostgreSQL connection failed:', err.message);
+      useDatabase = false;
+    }
+  })();
 }
 
-module.exports = { pool, useDatabase, testDbConnection };
+module.exports = { pool, useDatabase };
